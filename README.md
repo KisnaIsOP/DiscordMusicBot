@@ -128,7 +128,7 @@ If you like this project, please give it a ⭐ star on GitHub!
 
 <div align="center">
   
-Made with ❤️ by [Your Name]
+Made with ❤️ by [KISNA]
 
 [GitHub](https://github.com/YourUsername) • [Discord](https://discord.gg/YourServer)
 
