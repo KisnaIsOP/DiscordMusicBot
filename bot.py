@@ -13,6 +13,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import logging
 import shutil
+from discord import ButtonStyle
+from discord.ui import Button, View
+from async_timeout import timeout
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -79,6 +82,108 @@ bot.uptime = None
 bot.reconnect_attempts = 0
 MAX_RECONNECT_ATTEMPTS = 5
 
+class MusicControlsView(View):
+    def __init__(self, music_player, ctx):
+        super().__init__(timeout=None)
+        self.music_player = music_player
+        self.ctx = ctx
+        self.setup_buttons()
+
+    def setup_buttons(self):
+        # Pause/Resume Button
+        pause_button = Button(style=ButtonStyle.primary, label="⏸️ Pause", custom_id="pause")
+        pause_button.callback = self.pause_callback
+        self.add_item(pause_button)
+
+        # Skip Button
+        skip_button = Button(style=ButtonStyle.primary, label="⏭️ Skip", custom_id="skip")
+        skip_button.callback = self.skip_callback
+        self.add_item(skip_button)
+
+        # Loop Button
+        loop_button = Button(style=ButtonStyle.secondary, label="🔁 Loop", custom_id="loop")
+        loop_button.callback = self.loop_callback
+        self.add_item(loop_button)
+
+        # Shuffle Button
+        shuffle_button = Button(style=ButtonStyle.secondary, label="🔀 Shuffle", custom_id="shuffle")
+        shuffle_button.callback = self.shuffle_callback
+        self.add_item(shuffle_button)
+
+        # Stop Button
+        stop_button = Button(style=ButtonStyle.danger, label="⏹️ Stop", custom_id="stop")
+        stop_button.callback = self.stop_callback
+        self.add_item(stop_button)
+
+    async def pause_callback(self, interaction: discord.Interaction):
+        if interaction.user.voice and interaction.user.voice.channel == self.ctx.voice_client.channel:
+            if self.ctx.voice_client.is_playing():
+                self.ctx.voice_client.pause()
+                await interaction.response.send_message("⏸️ Paused", ephemeral=True)
+                # Update button label
+                for child in self.children:
+                    if child.custom_id == "pause":
+                        child.label = "▶️ Resume"
+                        break
+            else:
+                self.ctx.voice_client.resume()
+                await interaction.response.send_message("▶️ Resumed", ephemeral=True)
+                # Update button label
+                for child in self.children:
+                    if child.custom_id == "pause":
+                        child.label = "⏸️ Pause"
+                        break
+            await interaction.message.edit(view=self)
+        else:
+            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+
+    async def skip_callback(self, interaction: discord.Interaction):
+        if interaction.user.voice and interaction.user.voice.channel == self.ctx.voice_client.channel:
+            self.ctx.voice_client.stop()
+            await interaction.response.send_message("⏭️ Skipped", ephemeral=True)
+            await self.music_player.play_next(self.ctx)
+        else:
+            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+
+    async def loop_callback(self, interaction: discord.Interaction):
+        if interaction.user.voice and interaction.user.voice.channel == self.ctx.voice_client.channel:
+            self.music_player.loop = not self.music_player.loop
+            status = "enabled" if self.music_player.loop else "disabled"
+            await interaction.response.send_message(f"🔁 Loop {status}", ephemeral=True)
+            # Update button style
+            for child in self.children:
+                if child.custom_id == "loop":
+                    child.style = ButtonStyle.success if self.music_player.loop else ButtonStyle.secondary
+                    break
+            await interaction.message.edit(view=self)
+        else:
+            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+
+    async def shuffle_callback(self, interaction: discord.Interaction):
+        if interaction.user.voice and interaction.user.voice.channel == self.ctx.voice_client.channel:
+            if len(self.music_player.queue) > 1:
+                current = self.music_player.queue[0]
+                remaining = list(self.music_player.queue)[1:]
+                random.shuffle(remaining)
+                self.music_player.queue.clear()
+                self.music_player.queue.append(current)
+                self.music_player.queue.extend(remaining)
+                await interaction.response.send_message("🔀 Queue shuffled!", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Not enough songs in queue to shuffle!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+
+    async def stop_callback(self, interaction: discord.Interaction):
+        if interaction.user.voice and interaction.user.voice.channel == self.ctx.voice_client.channel:
+            self.music_player.queue.clear()
+            if self.ctx.voice_client:
+                await self.ctx.voice_client.disconnect()
+            await interaction.response.send_message("⏹️ Stopped and cleared queue", ephemeral=True)
+            self.stop()
+        else:
+            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+
 # Music player class to handle music functionality
 class MusicPlayer:
     def __init__(self):
@@ -97,6 +202,9 @@ class MusicPlayer:
             )
         else:
             self.spotify = None
+        self.current_embed = None
+        self.current_view = None
+        self.loop = False
 
     def detect_platform(self, url):
         """Detect the platform from the URL"""
@@ -198,8 +306,20 @@ class MusicPlayer:
             'platform': data.get('extractor', 'Unknown')
         }
 
+    async def create_now_playing_embed(self, song_info):
+        embed = discord.Embed(
+            title="🎵 Now Playing",
+            description=f"[{song_info['title']}]({song_info['url']})",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Duration", value=song_info['duration'], inline=True)
+        embed.add_field(name="Channel", value=song_info['channel'], inline=True)
+        if song_info.get('thumbnail'):
+            embed.set_thumbnail(url=song_info['thumbnail'])
+        embed.set_footer(text="Use the buttons below to control playback!")
+        return embed
+
     async def play_next(self, ctx):
-        """Play the next song in the queue"""
         if not self.queue:
             await ctx.send("Queue is empty!")
             return
@@ -207,35 +327,50 @@ class MusicPlayer:
         if ctx.voice_client is None:
             return
 
-        # Check if ffmpeg is installed
         try:
             if not shutil.which('ffmpeg'):
                 await ctx.send("❌ Error: ffmpeg is not installed. Please contact the bot administrator.")
                 logger.error("ffmpeg not found in system PATH")
                 return
-        except Exception as e:
-            logger.error(f"Error checking ffmpeg: {str(e)}")
 
-        try:
+            # Create and send Now Playing embed with buttons
+            embed = await self.create_now_playing_embed(self.queue[0])
+            view = MusicControlsView(self, ctx)
+            
+            # Store current embed and view
+            if self.current_embed:
+                try:
+                    await self.current_embed.delete()
+                except:
+                    pass
+            self.current_embed = await ctx.send(embed=embed, view=view)
+            self.current_view = view
+
+            # Play the song
             source = discord.FFmpegPCMAudio(self.queue[0]['url'], **FFMPEG_OPTIONS)
             ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
                 self.song_finished(ctx, e), bot.loop))
-            
-            # Send now playing message
-            await ctx.send(f"🎵 Now playing: {self.queue[0]['title']}\n"
-                          f"Channel: {self.queue[0]['channel']}\n"
-                          f"Duration: {self.queue[0]['duration']}")
+
         except Exception as e:
             await ctx.send(f"❌ Error playing song: {str(e)}")
             logger.error(f"Error in play_next: {str(e)}")
             self.queue.popleft()
             await self.play_next(ctx)
 
-    async def song_finished(self, ctx, e):
-        """Handle song finished event"""
-        if e:
-            logger.error(f"Error playing song: {str(e)}")
-        self.queue.popleft()
+    async def song_finished(self, ctx, error):
+        if error:
+            logger.error(f"Error playing song: {str(error)}")
+        
+        # Handle loop mode
+        if self.loop and self.queue:
+            self.queue.rotate(-1)
+        else:
+            self.queue.popleft()
+        
+        # Clean up current view
+        if self.current_view:
+            self.current_view.stop()
+        
         await self.play_next(ctx)
 
     async def search_youtube(self, query, limit=5):
