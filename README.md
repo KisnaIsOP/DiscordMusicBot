@@ -1,174 +1,135 @@
-# Discord Music Bot
+# 🎵 Harmony Hub - Discord Music Bot
 
-A feature-rich Discord music bot that can play music from YouTube in your server's voice channels.
+<div align="center">
+  
+![Harmony Hub Banner](https://i.imgur.com/XQxYJfX.png)
 
-## Features
+[![Discord.py Version](https://img.shields.io/badge/discord.py-2.3.2-blue.svg)](https://discordpy.readthedocs.io/en/stable/)
+[![Python Version](https://img.shields.io/badge/python-3.8+-yellow.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Railway Deploy](https://img.shields.io/badge/Railway-Deploy-purple.svg)](https://railway.app/)
 
-- Join/Leave voice channels
-- Play music from YouTube URLs
-- Queue system for multiple songs
-- Pause/Resume functionality
-- Skip current song
-- Error handling for invalid URLs and unavailable voice channels
+*A powerful, modern Discord music bot with multi-platform support and interactive controls*
 
-## Prerequisites
+[Features](#✨-features) • [Commands](#🎮-commands) • [Installation](#🚀-installation) • [Configuration](#⚙️-configuration) • [Deployment](#🌐-deployment)
 
-- Python 3.8 or higher
-- FFmpeg installed on your system
-- Discord Bot Token
-- Discord Developer Portal Application
+</div>
 
-## Setup Instructions
+## ✨ Features
 
-1. **Install FFmpeg**
-   - Download FFmpeg from the official website: https://ffmpeg.org/download.html
-   - Add FFmpeg to your system's PATH
+### 🎵 Multi-Platform Support
+- **YouTube** - Stream from videos and playlists
+- **Spotify** - Play tracks, albums, and playlists
+- **SoundCloud** - Stream your favorite tracks
+- **Direct URLs** - Support for direct audio links
 
-2. **Install Python Dependencies**
+### 🎚️ Advanced Playback
+- **High Quality Audio** - Crystal clear 192kbps audio
+- **Queue Management** - Add, remove, and view songs
+- **Interactive Controls** - Buttons for easy control
+- **Loop Mode** - Repeat your favorite tracks
+- **Shuffle** - Mix up your playlist
+
+### 🛠️ Technical Features
+- **Auto Reconnect** - Stable connection handling
+- **Error Recovery** - Robust error handling
+- **Resource Efficient** - Optimized performance
+- **Cross-Platform** - Works on all Discord platforms
+
+## 🎮 Commands
+
+### Essential Commands
+| Command | Description |
+|---------|-------------|
+| `!play <song>` | Play a song or add to queue |
+| `!pause` | Pause current playback |
+| `!resume` | Resume playback |
+| `!skip` | Skip to next song |
+| `!stop` | Stop playback and clear queue |
+
+### Queue Management
+| Command | Description |
+|---------|-------------|
+| `!queue` | Display current queue |
+| `!clear` | Clear the queue |
+| `!remove <number>` | Remove specific song |
+| `!shuffle` | Shuffle the queue |
+
+### Extra Features
+| Command | Description |
+|---------|-------------|
+| `!loop` | Toggle loop mode |
+| `!nowplaying` | Show current song |
+| `!join` | Join voice channel |
+| `!leave` | Leave voice channel |
+
+## 🚀 Installation
+
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/YourUsername/DiscordMusicBot.git
+   cd DiscordMusicBot
+   ```
+
+2. **Install Dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure Environment Variables**
-   - Create a `.env` file in the project root
-   - Add your Discord bot token:
-     ```
-     DISCORD_TOKEN=your_bot_token_here
-     ```
-
-4. **Run the Bot**
+3. **Set up Environment Variables**
    ```bash
-   python bot.py
+   # Create .env file
+   DISCORD_TOKEN=your_token_here
+   SPOTIFY_CLIENT_ID=optional_spotify_id
+   SPOTIFY_CLIENT_SECRET=optional_spotify_secret
    ```
 
-## Commands
+## ⚙️ Configuration
 
-- `!join` - Join your current voice channel
-- `!play <YouTube URL>` - Play a song from YouTube
-- `!pause` - Pause the current song
-- `!resume` - Resume the paused song
-- `!skip` - Skip the current song
-- `!leave` - Disconnect the bot from the voice channel
+### Required Dependencies
+- Python 3.8+
+- FFmpeg
+- discord.py
+- yt-dlp
+- spotipy (optional)
 
-## Error Handling
+### Optional Features
+- Spotify API credentials for Spotify support
+- Custom prefix configuration
+- Volume control settings
 
-The bot includes error handling for:
-- Invalid YouTube URLs
-- Unavailable voice channels
-- Missing permissions
-- Network connectivity issues
+## 🌐 Deployment
 
-## 24/7 Hosting Options
+### Railway Deployment
+1. Fork this repository
+2. Create a new Railway project
+3. Connect your GitHub repository
+4. Add environment variables
+5. Deploy!
 
-### 1. Railway Deployment (Recommended)
-1. Create a Railway account at https://railway.app using your GitHub account
+### Manual Deployment
+1. Install Python and FFmpeg
+2. Set up environment variables
+3. Run `python bot.py`
 
-2. Install Railway CLI (optional):
-   ```bash
-   npm i -g @railway/cli
-   ```
+## 📝 License
 
-3. Create a new project in Railway:
-   - Go to https://railway.app/dashboard
-   - Click "New Project"
-   - Select "Deploy from GitHub repo"
-   - Choose your bot repository
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-4. Set up environment variables:
-   - In your Railway project dashboard
-   - Go to "Variables"
-   - Add `DISCORD_TOKEN=your_bot_token`
+## 🤝 Contributing
 
-5. Add buildpacks (if needed):
-   - Railway automatically detects Python projects
-   - It will install FFmpeg automatically
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-6. Deploy:
-   - Railway will automatically deploy when you push to your GitHub repository
-   - You can also deploy manually from the dashboard
+## 💖 Support
 
-7. Monitor your bot:
-   - Use the Railway dashboard to view logs
-   - Use the `!status` command to check bot status
-   - Set up monitoring with UptimeRobot (optional)
+If you like this project, please give it a ⭐ star on GitHub!
 
-Benefits of Railway:
-- Easy deployment process
-- Free tier available
-- Automatic HTTPS
-- Built-in CI/CD
-- Great documentation
-- Good performance
-- Easy environment variable management
+---
 
-### 2. Heroku Deployment
-1. Create a Heroku account at https://heroku.com
-2. Install the Heroku CLI
-3. Login to Heroku CLI:
-   ```bash
-   heroku login
-   ```
-4. Create a new Heroku app:
-   ```bash
-   heroku create your-bot-name
-   ```
-5. Add buildpacks:
-   ```bash
-   heroku buildpacks:add heroku/python
-   heroku buildpacks:add https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest.git
-   ```
-6. Set up environment variables:
-   ```bash
-   heroku config:set DISCORD_TOKEN=your_bot_token
-   ```
-7. Deploy to Heroku:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git push heroku master
-   ```
-8. Start the worker:
-   ```bash
-   heroku ps:scale worker=1
-   ```
+<div align="center">
+  
+Made with ❤️ by [Your Name]
 
-### 3. Oracle Cloud (Free Tier)
-1. Create an Oracle Cloud account
-2. Launch a compute instance (ARM-based instances are free)
-3. Connect via SSH
-4. Install required packages:
-   ```bash
-   sudo apt update
-   sudo apt install python3-pip ffmpeg
-   ```
-5. Clone your bot repository
-6. Install dependencies and run the bot using PM2:
-   ```bash
-   npm install pm2 -g
-   pm2 start bot.py --name "discord-bot" --interpreter python3
-   ```
+[GitHub](https://github.com/YourUsername) • [Discord](https://discord.gg/YourServer)
 
-### 4. Running on a Raspberry Pi
-1. Set up your Raspberry Pi with Raspberry Pi OS
-2. Install required packages:
-   ```bash
-   sudo apt update
-   sudo apt install python3-pip ffmpeg
-   ```
-3. Clone your bot repository
-4. Install dependencies
-5. Run the bot using PM2 or create a systemd service
-
-## Maintaining 24/7 Operation
-- Monitor the bot's status using the `!status` command
-- Set up monitoring alerts (e.g., UptimeRobot)
-- Regularly check logs for errors
-- Keep your hosting platform's billing information up to date
-- Ensure your bot token remains valid
-
-## Notes
-
-- Make sure to keep your Discord bot token secure
-- The bot requires appropriate Discord permissions to function
-- Ensure stable internet connection for optimal performance
+</div>
