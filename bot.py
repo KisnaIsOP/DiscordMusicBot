@@ -25,22 +25,29 @@ logger = logging.getLogger('discord')
 # Load environment variables
 load_dotenv()
 
-# Configure YT-DLP with support for multiple platforms
+# Constants for audio
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0',  # IPv6 addresses cause issues sometimes
+    'source_address': '0.0.0.0',
     'force-ipv4': True,
-    'extract_flat': True,
+    'extract_flat': False,
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
 }
 
-# Configure FFMPEG options for better audio quality
 FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 0 -loglevel 0',
-    'options': '-vn -ar 48000 -ac 2 -b:a 192k -bufsize 2048k'
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn -af "volume=0.5"'
 }
 
 # Configure Spotify API (optional)
@@ -175,24 +182,13 @@ class MusicControlsView(View):
 # Music player class to handle music functionality
 class MusicPlayer:
     def __init__(self):
-        self.queue = deque()
-        self.current = None
-        self.voice_client = None
-        self.yt_dlp = yt_dlp.YoutubeDL(YDL_OPTIONS)
-        self.search_results = {}
-        # Initialize Spotify client if credentials are available
-        if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
-            self.spotify = spotipy.Spotify(
-                client_credentials_manager=SpotifyClientCredentials(
-                    client_id=SPOTIFY_CLIENT_ID,
-                    client_secret=SPOTIFY_CLIENT_SECRET
-                )
-            )
-        else:
-            self.spotify = None
-        self.current_embed = None
+        self.queue = []
+        self.current_message = None
         self.current_view = None
+        self.current_song = None
         self.loop = False
+        self.spotify = None
+        self.voice_client = None
 
     def detect_platform(self, url):
         """Detect the platform from the URL"""
@@ -201,38 +197,26 @@ class MusicPlayer:
                 return platform
         return None
 
-    async def search_youtube(self, query, limit=5):
+    async def search_youtube(self, query, limit=1):
         """Search YouTube for a query and return top results"""
         try:
-            # Prepare search query
             search_query = f"ytsearch{limit}:{query}"
-            
             with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                try:
-                    # Perform the search
-                    info = ydl.extract_info(search_query, download=False)
-                    
-                    if not info:
-                        return []
-                    
-                    entries = info.get('entries', [])
-                    results = []
-                    
-                    for entry in entries:
-                        if entry:
-                            results.append({
-                                'title': entry.get('title', 'Unknown Title'),
-                                'url': entry.get('webpage_url', None),
-                                'duration': str(datetime.timedelta(seconds=entry.get('duration', 0))),
-                                'thumbnail': entry.get('thumbnail', None),
-                                'channel': entry.get('uploader', 'Unknown'),
-                                'platform': 'youtube'
-                            })
-                    
-                    return results
-                except Exception as e:
-                    logger.error(f"YouTube search error: {str(e)}")
+                info = ydl.extract_info(search_query, download=False)
+                if not info or 'entries' not in info:
                     return []
+                
+                results = []
+                for entry in info['entries']:
+                    if entry:
+                        results.append({
+                            'title': entry.get('title', 'Unknown Title'),
+                            'url': entry.get('webpage_url', None),
+                            'duration': str(datetime.timedelta(seconds=entry.get('duration', 0))),
+                            'thumbnail': entry.get('thumbnail', None),
+                            'channel': entry.get('uploader', 'Unknown')
+                        })
+                return results
         except Exception as e:
             logger.error(f"Search error: {str(e)}")
             return []
@@ -314,29 +298,25 @@ class MusicPlayer:
     async def create_source(self, ctx, url):
         """Create an audio source from URL"""
         try:
-            # Extract audio info using yt-dlp
             with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if not info:
                     raise ValueError("Could not extract audio information")
                 
-                # Get the best audio format URL
-                formats = info.get('formats', [])
-                audio_formats = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
-                
-                if not audio_formats:
-                    # If no audio-only format, use best format
-                    url = info['url']
+                # Get the direct audio URL
+                if 'formats' in info:
+                    formats = info['formats']
+                    # Try to get best audio-only format
+                    audio_formats = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
+                    if audio_formats:
+                        url = audio_formats[0]['url']
+                    else:
+                        url = info['url']
                 else:
-                    # Use best audio-only format
-                    url = audio_formats[0]['url']
-                
+                    url = info['url']
+
                 # Create FFmpeg audio source
-                ffmpeg_options = {
-                    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-                    'options': '-vn -af "volume=0.5"'
-                }
-                return await discord.FFmpegOpusAudio.from_probe(url, **ffmpeg_options)
+                return await discord.FFmpegOpusAudio.from_probe(url, **FFMPEG_OPTIONS)
                 
         except Exception as e:
             logger.error(f"Error creating audio source: {str(e)}")
@@ -350,25 +330,35 @@ class MusicPlayer:
                 await ctx.send("Queue is empty!")
                 return
 
-            # Get next song from queue
-            song_info = self.queue.pop(0)
+            if not ctx.voice_client:
+                await ctx.send("❌ Not connected to a voice channel!")
+                return
+
+            # Get the next song
+            self.current_song = self.queue.pop(0)
             
             # Create audio source
-            source = await self.create_source(ctx, song_info['url'])
+            source = await self.create_source(ctx, self.current_song['url'])
             if not source:
-                # If source creation failed, try next song
                 await self.play_next(ctx)
                 return
 
             # Play the audio
-            ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
-                self.play_next(ctx), bot.loop).result() if e is None else print(f'Player error: {e}'))
+            def after_playing(error):
+                if error:
+                    logger.error(f"Player error: {error}")
+                asyncio.run_coroutine_threadsafe(self.song_finished(ctx, error), bot.loop)
+
+            ctx.voice_client.play(source, after=after_playing)
 
             # Send now playing embed
-            embed = await self.create_now_playing_embed(song_info)
+            embed = await self.create_now_playing_embed(self.current_song)
             view = await self.create_player_view(ctx)
             if self.current_message:
-                await self.current_message.delete()
+                try:
+                    await self.current_message.delete()
+                except:
+                    pass
             self.current_message = await ctx.send(embed=embed, view=view)
 
         except Exception as e:
@@ -432,20 +422,23 @@ class MusicPlayer:
             raise Exception(f"Error processing Spotify URL: {str(e)}")
 
     async def song_finished(self, ctx, error):
-        if error:
-            logger.error(f"Error playing song: {str(error)}")
-        
-        # Handle loop mode
-        if self.loop and self.queue:
-            self.queue.rotate(-1)
-        else:
-            self.queue.popleft()
-        
-        # Clean up current view
-        if self.current_view:
-            self.current_view.stop()
-        
-        await self.play_next(ctx)
+        """Handle song finish"""
+        try:
+            if error:
+                logger.error(f"Error playing song: {str(error)}")
+                await ctx.send(f"❌ Error playing song: {str(error)}")
+            
+            if self.loop and self.current_song:
+                self.queue.append(self.current_song)
+            
+            if self.queue:
+                await self.play_next(ctx)
+            else:
+                await ctx.send("Queue finished! Add more songs with !play")
+                
+        except Exception as e:
+            logger.error(f"Error in song_finished: {str(e)}")
+            await ctx.send(f"❌ Error handling song finish: {str(e)}")
 
 @bot.command(name='play')
 async def play(ctx, *, query):
