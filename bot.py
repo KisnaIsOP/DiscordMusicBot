@@ -12,6 +12,7 @@ import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import logging
+import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -197,17 +198,45 @@ class MusicPlayer:
             'platform': data.get('extractor', 'Unknown')
         }
 
-    async def play_next(self):
+    async def play_next(self, ctx):
         """Play the next song in the queue"""
-        if self.queue and self.voice_client:
-            if not self.voice_client.is_playing():
-                self.current = self.queue.popleft()
-                self.voice_client.play(
-                    discord.FFmpegPCMAudio(self.current['url'], **FFMPEG_OPTIONS),
-                    after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), bot.loop)
-                )
-                return self.current['title']
-        return None
+        if not self.queue:
+            await ctx.send("Queue is empty!")
+            return
+
+        if ctx.voice_client is None:
+            return
+
+        # Check if ffmpeg is installed
+        try:
+            if not shutil.which('ffmpeg'):
+                await ctx.send("❌ Error: ffmpeg is not installed. Please contact the bot administrator.")
+                logger.error("ffmpeg not found in system PATH")
+                return
+        except Exception as e:
+            logger.error(f"Error checking ffmpeg: {str(e)}")
+
+        try:
+            source = discord.FFmpegPCMAudio(self.queue[0]['url'], **FFMPEG_OPTIONS)
+            ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
+                self.song_finished(ctx, e), bot.loop))
+            
+            # Send now playing message
+            await ctx.send(f"🎵 Now playing: {self.queue[0]['title']}\n"
+                          f"Channel: {self.queue[0]['channel']}\n"
+                          f"Duration: {self.queue[0]['duration']}")
+        except Exception as e:
+            await ctx.send(f"❌ Error playing song: {str(e)}")
+            logger.error(f"Error in play_next: {str(e)}")
+            self.queue.popleft()
+            await self.play_next(ctx)
+
+    async def song_finished(self, ctx, e):
+        """Handle song finished event"""
+        if e:
+            logger.error(f"Error playing song: {str(e)}")
+        self.queue.popleft()
+        await self.play_next(ctx)
 
     async def search_youtube(self, query, limit=5):
         """Search YouTube for a query and return top results"""
@@ -390,9 +419,7 @@ async def play(ctx, *, query):
         
         # Start playing if not already playing
         if not ctx.voice_client.is_playing():
-            current_song = await music_player.play_next()
-            if current_song:
-                await ctx.send(f"🎵 Now playing: **{current_song}**")
+            await music_player.play_next(ctx)
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
@@ -420,9 +447,7 @@ async def skip(ctx):
     if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
         ctx.voice_client.stop()
         await ctx.send("Skipped ⏭️")
-        current_song = await music_player.play_next()
-        if current_song:
-            await ctx.send(f"Now playing: {current_song}")
+        await music_player.play_next(ctx)
     else:
         await ctx.send("Nothing to skip!")
 
