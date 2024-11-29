@@ -1,9 +1,9 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "apt-get update && apt-get install -y ffmpeg"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python bot.py"
+startCommand = ""
 healthcheckPath = "/"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
