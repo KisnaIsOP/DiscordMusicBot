@@ -25,28 +25,21 @@ logger = logging.getLogger('discord')
 load_dotenv()
 
 # Configure YT-DLP with support for multiple platforms
-YTDLP_OPTIONS = {
+YDL_OPTIONS = {
     'format': 'bestaudio/best',
-    'extractaudio': True,
-    'audioformat': 'mp3',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-    'restrictfilenames': True,
-    'noplaylist': False,  # Allow playlist support
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
+    'noplaylist': True,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch',
-    'source_address': '0.0.0.0',
-    # Add support for more platforms
-    'extractors': ['youtube', 'soundcloud', 'bandcamp', 'spotify', 'deezer'],
-    'extractor_args': {
-        'youtube': {
-            'skip_dash_manifest': True,
-            'nocheckcertificate': True
-        }
-    }
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',  # IPv6 addresses cause issues sometimes
+    'force-ipv4': True,
+    'extract_flat': True,
+}
+
+# Configure FFMPEG options for better audio quality
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 0 -loglevel 0',
+    'options': '-vn -ar 48000 -ac 2 -b:a 192k -bufsize 2048k'
 }
 
 # Configure Spotify API (optional)
@@ -60,12 +53,6 @@ URL_PATTERNS = {
     'soundcloud': r'(?:https?://)?(?:www\.)?soundcloud\.com',
     'bandcamp': r'(?:https?://)?(?:www\.)?.*\.bandcamp\.com',
     'deezer': r'(?:https?://)?(?:www\.)?deezer\.com'
-}
-
-# Configure FFMPEG options
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn',
 }
 
 # Initialize Discord bot with required intents
@@ -190,7 +177,7 @@ class MusicPlayer:
         self.queue = deque()
         self.current = None
         self.voice_client = None
-        self.yt_dlp = yt_dlp.YoutubeDL(YTDLP_OPTIONS)
+        self.yt_dlp = yt_dlp.YoutubeDL(YDL_OPTIONS)
         self.search_results = {}
         # Initialize Spotify client if credentials are available
         if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
@@ -319,6 +306,29 @@ class MusicPlayer:
         embed.set_footer(text="Use the buttons below to control playback!")
         return embed
 
+    async def create_source(self, song_info, ctx):
+        """Create an audio source for playing"""
+        try:
+            # Get fresh URL for the audio (URLs can expire)
+            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                info = ydl.extract_info(song_info['url'], download=False)
+                url = info['url']
+                
+            # Create FFmpeg audio source with proper options
+            source = discord.FFmpegPCMAudio(
+                url,
+                **FFMPEG_OPTIONS,
+                executable='ffmpeg'  # Explicitly specify ffmpeg
+            )
+            
+            # Add volume control
+            return discord.PCMVolumeTransformer(source, volume=1.0)
+            
+        except Exception as e:
+            await ctx.send(f"❌ Error creating audio source: {str(e)}")
+            logger.error(f"Error creating audio source: {str(e)}")
+            return None
+
     async def play_next(self, ctx):
         if not self.queue:
             await ctx.send("Queue is empty!")
@@ -346,10 +356,20 @@ class MusicPlayer:
             self.current_embed = await ctx.send(embed=embed, view=view)
             self.current_view = view
 
-            # Play the song
-            source = discord.FFmpegPCMAudio(self.queue[0]['url'], **FFMPEG_OPTIONS)
-            ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
-                self.song_finished(ctx, e), bot.loop))
+            # Create audio source
+            source = await self.create_source(self.queue[0], ctx)
+            if source is None:
+                self.queue.popleft()
+                await self.play_next(ctx)
+                return
+
+            # Play the song with error callback
+            ctx.voice_client.play(
+                source,
+                after=lambda e: asyncio.run_coroutine_threadsafe(
+                    self.song_finished(ctx, e), bot.loop
+                )
+            )
 
         except Exception as e:
             await ctx.send(f"❌ Error playing song: {str(e)}")
