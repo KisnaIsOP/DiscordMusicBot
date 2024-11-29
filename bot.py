@@ -9,6 +9,13 @@ import re
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('discord')
 
 # Load environment variables
 load_dotenv()
@@ -231,6 +238,30 @@ class MusicPlayer:
 
 # Create music player instance
 music_player = MusicPlayer()
+
+# Healthcheck server
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"Bot is healthy!")
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        return  # Disable logging for healthcheck requests
+
+def start_healthcheck_server():
+    port = int(os.getenv('PORT', 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    logger.info(f"Starting healthcheck server on port {port}")
+    server.serve_forever()
+
+# Start healthcheck server in a separate thread
+threading.Thread(target=start_healthcheck_server, daemon=True).start()
 
 @bot.event
 async def on_ready():
