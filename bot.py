@@ -57,11 +57,14 @@ FFMPEG_OPTIONS = {
     'options': '-vn',
 }
 
-# Initialize bot with command prefix and required intents
+# Initialize Discord bot with required intents
 intents = discord.Intents.default()
 intents.message_content = True
-intents.voice_states = True  # Required for voice channel events
-bot = commands.Bot(command_prefix='!', intents=intents)
+intents.voice_states = True
+intents.guilds = True
+intents.members = True
+
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # Add status variables
 bot.uptime = None
