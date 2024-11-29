@@ -311,6 +311,87 @@ class MusicPlayer:
             logger.error(f"Error in process_url: {str(e)}")
             await ctx.send(f"❌ An error occurred while processing the URL: {str(e)}")
 
+    async def create_source(self, ctx, url):
+        """Create an audio source from URL"""
+        try:
+            # Extract audio info using yt-dlp
+            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    raise ValueError("Could not extract audio information")
+                
+                # Get the best audio format URL
+                formats = info.get('formats', [])
+                audio_formats = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
+                
+                if not audio_formats:
+                    # If no audio-only format, use best format
+                    url = info['url']
+                else:
+                    # Use best audio-only format
+                    url = audio_formats[0]['url']
+                
+                # Create FFmpeg audio source
+                ffmpeg_options = {
+                    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+                    'options': '-vn -af "volume=0.5"'
+                }
+                return await discord.FFmpegOpusAudio.from_probe(url, **ffmpeg_options)
+                
+        except Exception as e:
+            logger.error(f"Error creating audio source: {str(e)}")
+            await ctx.send(f"❌ Error creating audio source: {str(e)}")
+            return None
+
+    async def play_next(self, ctx):
+        """Play the next song in queue"""
+        try:
+            if not self.queue:
+                await ctx.send("Queue is empty!")
+                return
+
+            # Get next song from queue
+            song_info = self.queue.pop(0)
+            
+            # Create audio source
+            source = await self.create_source(ctx, song_info['url'])
+            if not source:
+                # If source creation failed, try next song
+                await self.play_next(ctx)
+                return
+
+            # Play the audio
+            ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
+                self.play_next(ctx), bot.loop).result() if e is None else print(f'Player error: {e}'))
+
+            # Send now playing embed
+            embed = await self.create_now_playing_embed(song_info)
+            view = await self.create_player_view(ctx)
+            if self.current_message:
+                await self.current_message.delete()
+            self.current_message = await ctx.send(embed=embed, view=view)
+
+        except Exception as e:
+            logger.error(f"Error in play_next: {str(e)}")
+            await ctx.send(f"❌ Error playing next song: {str(e)}")
+
+    async def create_now_playing_embed(self, song_info):
+        embed = discord.Embed(
+            title="🎵 Now Playing",
+            description=f"[{song_info['title']}]({song_info['url']})",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Duration", value=song_info['duration'], inline=True)
+        embed.add_field(name="Channel", value=song_info['channel'], inline=True)
+        if song_info.get('thumbnail'):
+            embed.set_thumbnail(url=song_info['thumbnail'])
+        embed.set_footer(text="Use the buttons below to control playback!")
+        return embed
+
+    async def create_player_view(self, ctx):
+        view = MusicControlsView(self, ctx)
+        return view
+
     async def process_spotify(self, url):
         """Process Spotify URLs and convert to YouTube search queries"""
         try:
@@ -349,90 +430,6 @@ class MusicPlayer:
                 # If no Spotify credentials, suggest alternative
                 return [url.split('track/')[1].split('?')[0].replace('-', ' ')]
             raise Exception(f"Error processing Spotify URL: {str(e)}")
-
-    async def create_now_playing_embed(self, song_info):
-        embed = discord.Embed(
-            title="🎵 Now Playing",
-            description=f"[{song_info['title']}]({song_info['url']})",
-            color=discord.Color.blue()
-        )
-        embed.add_field(name="Duration", value=song_info['duration'], inline=True)
-        embed.add_field(name="Channel", value=song_info['channel'], inline=True)
-        if song_info.get('thumbnail'):
-            embed.set_thumbnail(url=song_info['thumbnail'])
-        embed.set_footer(text="Use the buttons below to control playback!")
-        return embed
-
-    async def create_source(self, song_info, ctx):
-        """Create an audio source for playing"""
-        try:
-            # Get fresh URL for the audio (URLs can expire)
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                info = ydl.extract_info(song_info['url'], download=False)
-                url = info['url']
-                
-            # Create FFmpeg audio source with proper options
-            source = discord.FFmpegPCMAudio(
-                url,
-                **FFMPEG_OPTIONS,
-                executable='ffmpeg'  # Explicitly specify ffmpeg
-            )
-            
-            # Add volume control
-            return discord.PCMVolumeTransformer(source, volume=1.0)
-            
-        except Exception as e:
-            await ctx.send(f"❌ Error creating audio source: {str(e)}")
-            logger.error(f"Error creating audio source: {str(e)}")
-            return None
-
-    async def play_next(self, ctx):
-        if not self.queue:
-            await ctx.send("Queue is empty!")
-            return
-
-        if ctx.voice_client is None:
-            return
-
-        try:
-            if not shutil.which('ffmpeg'):
-                await ctx.send("❌ Error: ffmpeg is not installed. Please contact the bot administrator.")
-                logger.error("ffmpeg not found in system PATH")
-                return
-
-            # Create and send Now Playing embed with buttons
-            embed = await self.create_now_playing_embed(self.queue[0])
-            view = MusicControlsView(self, ctx)
-            
-            # Store current embed and view
-            if self.current_embed:
-                try:
-                    await self.current_embed.delete()
-                except:
-                    pass
-            self.current_embed = await ctx.send(embed=embed, view=view)
-            self.current_view = view
-
-            # Create audio source
-            source = await self.create_source(self.queue[0], ctx)
-            if source is None:
-                self.queue.popleft()
-                await self.play_next(ctx)
-                return
-
-            # Play the song with error callback
-            ctx.voice_client.play(
-                source,
-                after=lambda e: asyncio.run_coroutine_threadsafe(
-                    self.song_finished(ctx, e), bot.loop
-                )
-            )
-
-        except Exception as e:
-            await ctx.send(f"❌ Error playing song: {str(e)}")
-            logger.error(f"Error in play_next: {str(e)}")
-            self.queue.popleft()
-            await self.play_next(ctx)
 
     async def song_finished(self, ctx, error):
         if error:
