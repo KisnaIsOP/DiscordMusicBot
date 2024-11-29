@@ -16,6 +16,7 @@ import shutil
 from discord import ButtonStyle
 from discord.ui import Button, View
 from async_timeout import timeout
+import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -200,6 +201,116 @@ class MusicPlayer:
                 return platform
         return None
 
+    async def search_youtube(self, query, limit=5):
+        """Search YouTube for a query and return top results"""
+        try:
+            # Prepare search query
+            search_query = f"ytsearch{limit}:{query}"
+            
+            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                try:
+                    # Perform the search
+                    info = ydl.extract_info(search_query, download=False)
+                    
+                    if not info:
+                        return []
+                    
+                    entries = info.get('entries', [])
+                    results = []
+                    
+                    for entry in entries:
+                        if entry:
+                            results.append({
+                                'title': entry.get('title', 'Unknown Title'),
+                                'url': entry.get('webpage_url', None),
+                                'duration': str(datetime.timedelta(seconds=entry.get('duration', 0))),
+                                'thumbnail': entry.get('thumbnail', None),
+                                'channel': entry.get('uploader', 'Unknown'),
+                                'platform': 'youtube'
+                            })
+                    
+                    return results
+                except Exception as e:
+                    logger.error(f"YouTube search error: {str(e)}")
+                    return []
+        except Exception as e:
+            logger.error(f"Search error: {str(e)}")
+            return []
+
+    async def process_url(self, url, ctx):
+        """Process URL and add to queue"""
+        try:
+            # Detect platform
+            platform = self.detect_platform(url)
+            
+            if platform == 'spotify':
+                songs = await self.process_spotify(url)
+                if not songs:
+                    await ctx.send("❌ Could not process Spotify URL")
+                    return
+                
+                for song in songs:
+                    # Search for each song on YouTube
+                    results = await self.search_youtube(song, limit=1)
+                    if results:
+                        self.queue.append(results[0])
+                    else:
+                        await ctx.send(f"⚠️ Could not find: {song}")
+                
+            else:
+                # Direct YouTube/SoundCloud URL or search query
+                if not url.startswith(('http://', 'https://')):
+                    # It's a search query
+                    results = await self.search_youtube(url, limit=1)
+                    if not results:
+                        await ctx.send("❌ No results found!")
+                        return
+                    self.queue.append(results[0])
+                else:
+                    # It's a direct URL
+                    try:
+                        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                            if not info:
+                                await ctx.send("❌ Could not process URL")
+                                return
+                            
+                            song_info = {
+                                'title': info.get('title', 'Unknown Title'),
+                                'url': info.get('webpage_url', url),
+                                'duration': str(datetime.timedelta(seconds=info.get('duration', 0))),
+                                'thumbnail': info.get('thumbnail', None),
+                                'channel': info.get('uploader', 'Unknown'),
+                                'platform': info.get('extractor', 'Unknown')
+                            }
+                            self.queue.append(song_info)
+                    except Exception as e:
+                        logger.error(f"URL processing error: {str(e)}")
+                        await ctx.send(f"❌ Error processing URL: {str(e)}")
+                        return
+
+            # Create embed for queue addition
+            song_info = self.queue[-1]
+            embed = discord.Embed(
+                title="Added to Queue",
+                description=f"[{song_info['title']}]({song_info['url']})",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Channel", value=song_info['channel'], inline=True)
+            embed.add_field(name="Duration", value=song_info['duration'], inline=True)
+            if song_info.get('thumbnail'):
+                embed.set_thumbnail(url=song_info['thumbnail'])
+            
+            await ctx.send(embed=embed)
+            
+            # Start playing if not already playing
+            if not ctx.voice_client.is_playing():
+                await self.play_next(ctx)
+
+        except Exception as e:
+            logger.error(f"Error in process_url: {str(e)}")
+            await ctx.send(f"❌ An error occurred while processing the URL: {str(e)}")
+
     async def process_spotify(self, url):
         """Process Spotify URLs and convert to YouTube search queries"""
         try:
@@ -238,60 +349,6 @@ class MusicPlayer:
                 # If no Spotify credentials, suggest alternative
                 return [url.split('track/')[1].split('?')[0].replace('-', ' ')]
             raise Exception(f"Error processing Spotify URL: {str(e)}")
-
-    async def add_to_queue(self, url, search=False):
-        """Add a song to the queue with multi-platform support"""
-        try:
-            platform = self.detect_platform(url) if not search else None
-            queries = []
-
-            if platform == 'spotify':
-                # Convert Spotify URL to YouTube search queries
-                queries = await self.process_spotify(url)
-            else:
-                queries = [url]
-
-            added_songs = []
-            for query in queries:
-                loop = asyncio.get_event_loop()
-                if search or platform == 'spotify':
-                    # Search on YouTube
-                    results = await self.search_youtube(query, limit=1)
-                    if not results:
-                        continue
-                    data = await loop.run_in_executor(None, lambda: self.yt_dlp.extract_info(results[0]['url'], download=False))
-                else:
-                    # Direct URL from supported platform
-                    data = await loop.run_in_executor(None, lambda: self.yt_dlp.extract_info(query, download=False))
-
-                if 'entries' in data:
-                    # Playlist
-                    for entry in data['entries']:
-                        if entry:
-                            song_info = self._create_song_info(entry)
-                            self.queue.append(song_info)
-                            added_songs.append(song_info)
-                else:
-                    # Single track
-                    song_info = self._create_song_info(data)
-                    self.queue.append(song_info)
-                    added_songs.append(song_info)
-
-            return added_songs
-        except Exception as e:
-            raise Exception(f"An error occurred while processing the URL: {str(e)}")
-
-    def _create_song_info(self, data):
-        """Create song info dictionary from data"""
-        return {
-            'url': data['url'],
-            'title': data['title'],
-            'webpage_url': data.get('webpage_url', data['url']),
-            'duration': data.get('duration', 0),
-            'thumbnail': data.get('thumbnail', None),
-            'channel': data.get('uploader', 'Unknown'),
-            'platform': data.get('extractor', 'Unknown')
-        }
 
     async def create_now_playing_embed(self, song_info):
         embed = discord.Embed(
@@ -393,32 +450,30 @@ class MusicPlayer:
         
         await self.play_next(ctx)
 
-    async def search_youtube(self, query, limit=5):
-        """Search YouTube for a query and return top results"""
-        try:
-            # Prepare search query
-            search_query = f"ytsearch{limit}:{query}"
+@bot.command(name='play')
+async def play(ctx, *, query):
+    """Play a song from URL or search query"""
+    try:
+        # Check if user is in a voice channel
+        if not ctx.author.voice:
+            await ctx.send("❌ You must be in a voice channel to use this command!")
+            return
             
-            # Get search results
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: self.yt_dlp.extract_info(search_query, download=False))
-            
-            if 'entries' not in data:
-                return []
+        # Join voice channel if not already connected
+        if not ctx.voice_client:
+            await ctx.author.voice.channel.connect()
+        elif ctx.voice_client.channel != ctx.author.voice.channel:
+            await ctx.voice_client.move_to(ctx.author.voice.channel)
 
-            results = []
-            for entry in data['entries']:
-                if entry:
-                    results.append({
-                        'title': entry.get('title', 'N/A'),
-                        'url': entry.get('webpage_url', None),
-                        'duration': entry.get('duration', 0),
-                        'channel': entry.get('uploader', 'N/A')
-                    })
-            return results
-        except Exception as e:
-            print(f"Error searching YouTube: {e}")
-            return []
+        # Show searching message for queries
+        if not query.startswith(('http://', 'https://')):
+            await ctx.send(f"🔍 Searching for: {query}")
+
+        # Process the URL or search query
+        await music_player.process_url(query, ctx)
+
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
 
 # Create music player instance
 music_player = MusicPlayer()
@@ -531,52 +586,6 @@ async def join(ctx):
         music_player.voice_client = ctx.voice_client
     
     await ctx.send(f"Joined {channel.name}")
-
-@bot.command(name='play')
-async def play(ctx, *, query):
-    """Play a song from YouTube URL or search query"""
-    if not ctx.voice_client:
-        await join(ctx)
-    
-    try:
-        # Check if the query is a URL
-        is_url = query.startswith(('http://', 'https://', 'www.'))
-        
-        # Send a "Searching..." message for non-URL queries
-        if not is_url:
-            search_msg = await ctx.send(f"🔍 Searching for: `{query}`")
-        
-        # Add to queue (with search if it's not a URL)
-        song_info = await music_player.add_to_queue(query, search=not is_url)
-        
-        # Delete the searching message if it exists
-        if not is_url:
-            await search_msg.delete()
-        
-        # Create an embed for the song
-        embed = discord.Embed(
-            title="Added to Queue",
-            description=f"[{song_info[0]['title']}]({song_info[0]['webpage_url']})",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Channel", value=song_info[0]['channel'], inline=True)
-        
-        # Add duration field if available
-        if song_info[0]['duration']:
-            minutes, seconds = divmod(song_info[0]['duration'], 60)
-            embed.add_field(name="Duration", value=f"{minutes}:{seconds:02d}", inline=True)
-        
-        # Add thumbnail if available
-        if song_info[0]['thumbnail']:
-            embed.set_thumbnail(url=song_info[0]['thumbnail'])
-        
-        await ctx.send(embed=embed)
-        
-        # Start playing if not already playing
-        if not ctx.voice_client.is_playing():
-            await music_player.play_next(ctx)
-    except Exception as e:
-        await ctx.send(f"❌ Error: {str(e)}")
 
 @bot.command(name='pause')
 async def pause(ctx):
